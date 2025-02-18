@@ -137,6 +137,9 @@ int main(int argc, char *argv[])
         }
         out.write(compressedData.data(), compressedData.size());        
     }
+    else if(command=="ls"){
+        return 0;
+    }
     else {
         std::cerr << "Unknown command " << command << '\n';
         return EXIT_FAILURE;
