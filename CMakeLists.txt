@@ -8,4 +8,8 @@ file(GLOB_RECURSE SOURCE_FILES src/*.cpp src/*.hpp)
 
 add_executable(git ${SOURCE_FILES})
 
-target_link_libraries(git -lz)
+# Find OpenSSL
+find_package(OpenSSL REQUIRED)
+
+# Link against zlib and OpenSSL's crypto library
+target_link_libraries(git PRIVATE OpenSSL::Crypto -lz)
