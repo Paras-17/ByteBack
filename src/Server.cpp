@@ -1,8 +1,12 @@
 #include <iostream>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
+#include <vector>
+#include <iomanip>
 #include <zlib.h>
+#include <openssl/sha.h>
 
 int main(int argc, char *argv[])
 {
@@ -13,7 +17,6 @@ int main(int argc, char *argv[])
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     std::cerr << "Logs from your program will appear here!\n";
 
-    // Uncomment this block to pass the first stage
     if (argc < 2) {
         std::cerr << "No command provided.\n";
         return EXIT_FAILURE;
@@ -73,6 +76,66 @@ int main(int argc, char *argv[])
             }
         }
         std::cout << std::string_view(buf).substr(buf.find('\0') + 1);
+    }else if (command =="hash-object")
+    {
+        if (argc < 4) {
+            std::cerr << "Invalid number of arguments, missing parameters \n";
+            return EXIT_FAILURE;
+        }
+        std::string flag = argv[2];
+        if(flag !="-w"){
+            std::cerr <<"Expected -w flag for writing the object. \n";
+            return EXIT_FAILURE;
+        }
+        std::string file_path = argv[3];
+        //open file
+        std::ifstream file(file_path,std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Failed to open file: " << file_path << "\n";
+            return EXIT_FAILURE;
+        }
+        std::ostringstream fileStream;
+        fileStream<<file.rdbuf();
+        std::string content = fileStream.str();
+        // blob construct
+        std::string header = "blob " + std::to_string(content.size()) + '\0';
+        std::string blob_object = header + content;
+        unsigned char hash[SHA_DIGEST_LENGTH];
+        SHA1(reinterpret_cast<const unsigned char*>(blob_object.data()),
+             blob_object.size(), hash);
+
+        std::ostringstream hashStream;
+        hashStream << std::hex << std::setfill('0');
+        for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+            hashStream << std::setw(2) << static_cast<int>(hash[i]);
+        }
+        std::string hashString = hashStream.str();
+        //print the 40 char sha hash
+        std::cout << hashString << "\n";
+        uLongf compressedSize = compressBound(blob_object.size());
+        std::vector<char> compressedData(compressedSize);
+        int res = compress(reinterpret_cast<Bytef*>(compressedData.data()), &compressedSize,
+                           reinterpret_cast<const Bytef*>(blob_object.data()),
+                           blob_object.size());
+        if (res != Z_OK) {
+            std::cerr << "Compression failed with error code: " << res << "\n";
+            return EXIT_FAILURE;
+        }
+        // Resize vector to the actual compressed size.
+        compressedData.resize(compressedSize);
+        // Determine the storage path: first 2 characters form the directory.
+        std::string dir = ".git/objects/" + hashString.substr(0, 2);
+        std::filesystem::create_directories(dir);
+        // The remaining 38 characters form the file name.
+        std::string object_path = dir + "/" + hashString.substr(2);
+
+        // Write the compressed blob object to the file.
+        std::ofstream out(object_path, std::ios::binary);
+        if (!out.is_open()) {
+            std::cerr << "Failed to write object file: " << object_path << "\n";
+            return EXIT_FAILURE;
+        }
+        out.write(compressedData.data(), compressedData.size());        
     }
     else {
         std::cerr << "Unknown command " << command << '\n';
