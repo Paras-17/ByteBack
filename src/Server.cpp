@@ -8,19 +8,24 @@
 #include <algorithm>
 #include <zlib.h>
 #include <openssl/sha.h>
-
+#include <cstring>
 namespace fs = std::filesystem;
 
 // ----------------------------------------------------------------
-// Helper structure for a tree entry
+// A simple structure to represent a tree entry.
+// Each tree entry holds:
+//   - mode: "100644" for regular files, "40000" for directories.
+//   - name: the filename or directory name.
+//   - sha: the 40-character SHA (in hexadecimal) of the corresponding object.
 struct TreeEntry {
-    std::string mode;   // "100644" for files, "40000" for directories
-    std::string name;   // The filename (or directory name)
-    std::string sha;    // The 40-character SHA (in hex) for the object
+    std::string mode;
+    std::string name;
+    std::string sha;
 };
 
 // ----------------------------------------------------------------
-// Helper: Convert a 40-character hex string into its raw 20-byte binary form.
+// Helper function: Convert a 40-character hex string into its raw 20-byte binary form.
+// Git stores the SHA in raw binary format within tree objects.
 std::string hex_to_raw(const std::string &hex) {
     std::string raw;
     raw.resize(20);
@@ -34,11 +39,13 @@ std::string hex_to_raw(const std::string &hex) {
 }
 
 // ----------------------------------------------------------------
-// Helper: Write an object (blob, tree, etc.) to .git/objects.
-//  - object_data: the uncompressed object (header + payload)
-//  - Returns the 40-character SHA (hex string)
+// Helper function: Write an object (e.g. blob, tree) to the .git/objects directory.
+// The function compresses the provided object_data, writes it into the appropriate
+// path based on its SHA-1 hash, and returns the 40-character hash.
+//
+// object_data should be the uncompressed data (including the header).
 std::string write_object(const std::string &object_data) {
-    // Compute SHA-1 hash over the uncompressed object_data.
+    // Compute the SHA-1 hash of the object_data.
     unsigned char hash[SHA_DIGEST_LENGTH];
     SHA1(reinterpret_cast<const unsigned char*>(object_data.data()),
          object_data.size(), hash);
@@ -49,8 +56,8 @@ std::string write_object(const std::string &object_data) {
         hashStream << std::setw(2) << static_cast<int>(hash[i]);
     }
     std::string hashString = hashStream.str();
-    
-    // Compress the object_data with zlib.
+
+    // Compress the object_data using zlib.
     uLongf compressedSize = compressBound(object_data.size());
     std::vector<char> compressedData(compressedSize);
     int res = compress(reinterpret_cast<Bytef*>(compressedData.data()),
@@ -62,13 +69,13 @@ std::string write_object(const std::string &object_data) {
         exit(EXIT_FAILURE);
     }
     compressedData.resize(compressedSize);
-    
-    // Compute the storage path: .git/objects/<first 2 chars>/<remaining 38 chars>
+
+    // Determine the storage path: .git/objects/<first two chars>/<remaining 38 chars>
     std::string dir = ".git/objects/" + hashString.substr(0, 2);
     fs::create_directories(dir);
     std::string object_path = dir + "/" + hashString.substr(2);
-    
-    // Write the object only if it doesn't already exist.
+
+    // Write the compressed object only if it does not already exist.
     if (!fs::exists(object_path)) {
         std::ofstream out(object_path, std::ios::binary);
         if (!out.is_open()) {
@@ -77,79 +84,154 @@ std::string write_object(const std::string &object_data) {
         }
         out.write(compressedData.data(), compressedData.size());
     }
+    
     return hashString;
 }
 
 // ----------------------------------------------------------------
 // Recursive function: write_tree()
-// Given a directory (as a filesystem path), scan its entries (ignoring .git),
-// create blob objects for files and recursively tree objects for subdirectories,
-// build a tree object with the format:
-//   "tree <payload_size>\0" + for each entry: "<mode> <name>\0<20_byte_sha>"
-// then write that tree object to the object store and return its SHA.
-std::string write_tree(const fs::path &dir) {
+// This function recursively scans the directory provided (dir_path),
+// creates blob objects for regular files and recursively builds tree objects
+// for subdirectories. It then constructs a tree object representing the directory,
+// writes it to the object store, and returns its SHA.
+//
+// The tree object format (before compression) is:
+//   "tree <payload_length>\0" followed by a concatenation of entries.
+// Each entry has the form: "<mode> <name>\0" + <20-byte raw SHA>
+std::string write_tree(const std::string dir_path) {
+    fs::path dir(dir_path);
     std::vector<TreeEntry> entries;
-    
-    // Iterate over entries in this directory.
+    std::string mode;
+    std::string sha1;
+
+    // Iterate over each entry in the directory.
     for (const auto &entry : fs::directory_iterator(dir)) {
-        // Ignore the .git directory
-        if (entry.path().filename() == ".git")
+        std::string name = entry.path().filename().string();
+        // Ignore the .git directory.
+        if (name == ".git")
             continue;
-        
-        if (entry.is_regular_file()) {
-            // Process file: read its content.
-            std::ifstream file(entry.path(), std::ios::binary);
-            if (!file.is_open()) {
-                std::cerr << "Failed to open file: " << entry.path() << "\n";
-                exit(EXIT_FAILURE);
+
+        if (entry.is_directory()) {
+            mode = "40000";  // Mode for directories.
+            // Recursively write the subtree.
+            sha1 = write_tree(entry.path().string());
+        }
+        else if (entry.is_regular_file()) {
+            mode = "100644"; // Mode for regular files.
+            // Create a blob object from the file.
+            sha1 = /* a function similar to hash_object */ ""; // Assume you already have hash_object implemented.
+            // For demonstration, we'll call a stub here.
+            {
+                std::ifstream file(entry.path(), std::ios::binary);
+                if (!file.is_open()) {
+                    std::cerr << "Failed to open file: " << entry.path() << "\n";
+                    exit(EXIT_FAILURE);
+                }
+                std::ostringstream ss;
+                ss << file.rdbuf();
+                std::string content = ss.str();
+                std::string header = "blob " + std::to_string(content.size()) + '\0';
+                std::string blob_object = header + content;
+                unsigned char hash[SHA_DIGEST_LENGTH];
+                SHA1(reinterpret_cast<const unsigned char*>(blob_object.data()),
+                     blob_object.size(), hash);
+                std::ostringstream hashStream;
+                hashStream << std::hex << std::setfill('0');
+                for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+                    hashStream << std::setw(2) << static_cast<int>(hash[i]);
+                }
+                sha1 = hashStream.str();
+                // Also write the blob object.
+                write_object(blob_object);
             }
-            std::ostringstream ss;
-            ss << file.rdbuf();
-            std::string content = ss.str();
-            // Create the blob object: header "blob <size>\0" + content.
-            std::string header = "blob " + std::to_string(content.size()) + "\0";
-            std::string blob_object = header + content;
-            // Write the blob object and get its SHA.
-            std::string blob_sha = write_object(blob_object);
+        }
+
+        // If a SHA was obtained, convert it to its raw 20-byte binary representation.
+        if (!sha1.empty()) {
+            std::string binary_sha;
+            for (size_t i = 0; i < sha1.length(); i += 2) {
+                std::string byte_string = sha1.substr(i, 2);
+                char byte = static_cast<char>(std::stoi(byte_string, nullptr, 16));
+                binary_sha.push_back(byte);
+            }
+            // Build the entry data: "<mode> <name>\0" + binary SHA.
+            std::string entry_data = mode + " " + name + '\0' + binary_sha;
             TreeEntry te;
-            te.mode = "100644";  // Regular file mode.
-            te.name = entry.path().filename().string();
-            te.sha = blob_sha;
-            entries.push_back(te);
-        } else if (entry.is_directory()) {
-            // Process directory: recursively write a tree for it.
-            std::string subtree_sha = write_tree(entry.path());
-            TreeEntry te;
-            te.mode = "40000";  // Directory mode.
-            te.name = entry.path().filename().string();
-            te.sha = subtree_sha;
+            te.mode = mode;
+            te.name = name;
+            te.sha = sha1;
             entries.push_back(te);
         }
-        // (Symlinks and other types can be added here if desired.)
     }
-    
+
     // Sort tree entries by name (alphabetical order).
     std::sort(entries.begin(), entries.end(), [](const TreeEntry &a, const TreeEntry &b) {
         return a.name < b.name;
     });
-    
-    // Build the tree payload.
-    // For each entry, the format is: "<mode> <name>\0" + raw 20-byte SHA.
-    std::string payload;
-    for (const auto &te : entries) {
-        payload += te.mode + " " + te.name;
-        payload.push_back('\0');
-        payload += hex_to_raw(te.sha);
-    }
-    
-    // Build the full tree object: header "tree <payload_size>\0" followed by payload.
-    std::string header = "tree " + std::to_string(payload.size());
-    header.push_back('\0');
 
-    std::string tree_object = header + payload;
-    
-    // Write the tree object and return its SHA.
-    return write_object(tree_object);
+    // Build the tree content payload.
+    std::string tree_content;
+    for (auto &it : entries) {
+        // For each entry, append: "<mode> <name>\0" + raw SHA.
+        std::string binary_sha;
+        for (size_t i = 0; i < it.sha.length(); i += 2) {
+            std::string byte_string = it.sha.substr(i, 2);
+            char byte = static_cast<char>(std::stoi(byte_string, nullptr, 16));
+            binary_sha.push_back(byte);
+        }
+        tree_content += it.mode + " " + it.name;
+        tree_content.push_back('\0');
+        tree_content += binary_sha;
+    }
+
+    // Build the full tree object.
+    // IMPORTANT: Build the header by appending a null byte explicitly.
+    std::string header = "tree " + std::to_string(tree_content.size());
+    header.push_back('\0');
+    std::string tree_store = header + tree_content;
+
+    // Compute the SHA1 hash of the uncompressed tree object.
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast< const unsigned char *>(tree_store.c_str()), tree_store.size(), hash);
+    std::string tree_sha;
+    for (int i = 0; i < 20; i++) {
+        std::stringstream ss;
+        ss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(hash[i]);
+        tree_sha += ss.str();
+    }
+
+    // Write the tree object (compress it) to the object store.
+    std::string tree_dir = ".git/objects/" + tree_sha.substr(0, 2);
+    fs::create_directories(tree_dir);
+    std::string tree_filepath = tree_dir + "/" + tree_sha.substr(2);
+
+    // Compress the tree object using zlib.
+    z_stream zs;
+    memset(&zs, 0, sizeof(zs));
+    if (deflateInit(&zs, Z_BEST_COMPRESSION) != Z_OK) {
+        throw(std::runtime_error("deflateInit failed while compressing."));
+    }
+    zs.next_in = (Bytef *)tree_store.c_str();
+    zs.avail_in = tree_store.size();
+    int ret;
+    char outBuffer[32768];
+    std::string outstring;
+    do {
+        zs.next_out = reinterpret_cast<Bytef *>(outBuffer);
+        zs.avail_out = sizeof(outBuffer);
+        ret = deflate(&zs, Z_FINISH);
+        if (outstring.size() < zs.total_out) {
+            outstring.insert(outstring.end(), outBuffer, outBuffer + zs.total_out - outstring.size());
+        }
+    } while (ret == Z_OK);
+    deflateEnd(&zs);
+    if (ret != Z_STREAM_END) {
+        throw(std::runtime_error("Exception during zlib compression: " + std::to_string(ret)));
+    }
+    std::ofstream outfile(tree_filepath, std::ios::binary);
+    outfile.write(outstring.c_str(), outstring.size());
+    outfile.close();
+    return tree_sha;
 }
 
 // ----------------------------------------------------------------
@@ -350,11 +432,13 @@ int main(int argc, char *argv[])
         }
     }
     else if (command == "write-tree") {
-        // The "write-tree" command: recursively create tree objects from
-        // the current working directory (ignoring .git) and print the SHA.
-        // We assume all files are staged.
-        std::string tree_sha = write_tree(fs::current_path());
-        std::cout << tree_sha << "\n";
+        // Call write_tree on the current directory (ignoring .git)
+        std::string tree_hash = write_tree(fs::current_path().string());
+        if (tree_hash.empty()) {
+            std::cerr << "Error in writing tree object\n";
+            return EXIT_FAILURE;
+        }
+        std::cout << tree_hash << "\n";
     }
     else {
         std::cerr << "Unknown command " << command << '\n';
