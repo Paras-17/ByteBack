@@ -10,6 +10,10 @@
 #include <openssl/sha.h>
 #include <cstring>
 #include <optional>
+#include <ctime>
+#include <arpa/inet.h>
+#include <curl/curl.h>
+#include <map>
 // #include <fmt/format.h>
 namespace fs = std::filesystem;
 
@@ -305,6 +309,200 @@ output.close();
 std::cout << commit_hash << std::endl;
 }
 
+
+
+// --- Data Structures for Refs ---
+struct GitRef {
+    std::string name;
+    std::string hash;
+};
+
+// --- Helper: Build object path ---
+std::string get_object_path(const std::string& hash, const std::string& output_path = ".") {
+    return output_path + "/.git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
+}
+
+// --- Helper: Convert hash to hex string (if given raw binary) ---
+std::string hash_to_hex(const std::string& hash) {
+    std::stringstream ss;
+    for (unsigned char c : hash) {
+        ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+    }
+    return ss.str();
+}
+
+// --- CURL Write Callback ---
+size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    std::string* response = reinterpret_cast<std::string*>(userdata);
+    response->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+// --- Initialize CURL ---
+CURL* init_curl() {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        throw std::runtime_error("Failed to initialize CURL");
+    }
+    return curl;
+}
+
+// --- HTTP GET ---
+std::string http_get(CURL* curl, const std::string& url) {
+    std::string response;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        throw std::runtime_error("HTTP GET failed: " + std::string(curl_easy_strerror(res)));
+    }
+    return response;
+}
+
+// --- Get Remote Refs URL ---
+std::string get_refs_url(const std::string& repo_url) {
+    std::string url = repo_url;
+    if (url.back() == '/') {
+        url.pop_back();
+    }
+    // Append ".git/info/refs?service=git-upload-pack"
+    return url + ".git/info/refs?service=git-upload-pack";
+}
+
+// --- Get Upload Pack URL ---
+std::string get_upload_pack_url(const std::string& repo_url) {
+    std::string url = repo_url;
+    if (url.back() == '/') {
+        url.pop_back();
+    }
+    if (url.substr(url.size()-4) != ".git") {
+        url += ".git";
+    }
+    return url + "/git-upload-pack";
+}
+
+// --- Parse Remote Refs ---
+// Very simple parser: splits lines and extracts ref names and hashes.
+std::vector<GitRef> parse_git_refs(const std::string& response) {
+    std::vector<GitRef> refs;
+    std::istringstream iss(response);
+    std::string line;
+    // Skip first two lines (protocol header and blank line)
+    std::getline(iss, line);
+    std::getline(iss, line);
+    while (std::getline(iss, line)) {
+        if (line.size() < 44) continue;
+        // Assume hash is characters 4-43 and ref name starts at index 44
+        std::string hash = line.substr(4, 40);
+        size_t ref_pos = line.find(" refs/");
+        if (ref_pos != std::string::npos) {
+            std::string name = line.substr(ref_pos + 1);
+            refs.push_back({name, hash});
+        }
+    }
+    return refs;
+}
+void init_git(const std::string& target_path = ".") {
+    // Create the target directory if it doesn't exist.
+    fs::create_directories(target_path);
+    // Create the .git directory and its subdirectories.
+    fs::create_directory(target_path + "/.git");
+    fs::create_directory(target_path + "/.git/objects");
+    fs::create_directory(target_path + "/.git/refs");
+
+    // Create the HEAD file with the default reference.
+    std::ofstream headFile(target_path + "/.git/HEAD");
+    if (headFile.is_open()) {
+        headFile << "ref: refs/heads/main\n";
+        headFile.close();
+    } else {
+        throw std::runtime_error("Failed to create .git/HEAD file");
+    }
+}
+
+// --- Fetch Pack ---
+// Builds a simple request body (with "want" lines) and performs an HTTP POST.
+std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<GitRef>& refs) {
+    std::string response;
+    std::stringstream req_body;
+    // For simplicity, request the first ref (you could improve this to request more).
+    if (!refs.empty()) {
+        std::string want_line = "want " + refs[0].hash + "\n";
+        // The length prefix is the length of the want_line plus 4 (for the prefix itself).
+        std::stringstream length_prefix;
+        length_prefix << std::hex << std::setw(4) << std::setfill('0') << (want_line.size() + 4);
+        req_body << length_prefix.str() << want_line;
+    }
+    // End the request with "0000"
+    req_body << "0000";
+    std::string req_str = req_body.str();
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req_str.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        curl_easy_cleanup(curl);
+        throw std::runtime_error("HTTP POST failed: " + std::string(curl_easy_strerror(res)));
+    }
+    return response;
+}
+
+// --- Process Packfile ---
+// This is a simplified function to process a packfile response from the server.
+// In a complete implementation, you would parse the packfile format and write objects.
+void process_packfile(const std::string& pack_data, const std::string& output_path) {
+    // For demonstration, we just print the packfile size.
+    std::cout << "Received packfile of size " << pack_data.size() << " bytes.\n";
+    // TODO: Unpack the packfile and write objects to .git/objects.
+    // You can reuse your existing packfile processing functions here.
+}
+
+// --- Clone Repository ---
+// This function ties together the clone process.
+void clone_repository(const std::string& repo_url, const std::string& output_path) {
+    // Initialize CURL.
+    CURL* curl = init_curl();
+    if (!curl) {
+        throw std::runtime_error("Failed to initialize CURL");
+    }
+    try {
+        // Initialize the local repository structure in output_path.
+        init_git(output_path);
+        // Fetch remote refs.
+        std::string refs_url = get_refs_url(repo_url);
+        std::string refs_response = http_get(curl, refs_url);
+        auto refs = parse_git_refs(refs_response);
+        if (refs.empty()) {
+            throw std::runtime_error("No refs found from remote");
+        }
+        // Fetch packfile using the first ref (for simplicity).
+        std::string upload_pack_url = get_upload_pack_url(repo_url);
+        std::string pack_response = fetch_pack(curl, upload_pack_url, refs);
+        // Process the packfile to populate .git/objects.
+        process_packfile(pack_response, output_path);
+        // Optionally, update HEAD (for example, set HEAD to the ref "refs/heads/main")
+        std::ofstream headFile(fs::path(output_path) / ".git/HEAD");
+        if (headFile.is_open()) {
+            headFile << "ref: refs/heads/main\n";
+            headFile.close();
+        }
+        curl_easy_cleanup(curl);
+    } catch (const std::exception& e) {
+        curl_easy_cleanup(curl);
+        throw std::runtime_error("Clone failed: " + std::string(e.what()));
+    }
+}
+
+
 // ----------------------------------------------------------------
 // Main
 int main(int argc, char *argv[])
@@ -515,7 +713,21 @@ int main(int argc, char *argv[])
         std::string parent_commit_sha(argv[4]);
         std::string message(argv[6]);
         commit_tree(tree_sha, parent_commit_sha, message);
-      }
+      }else if (command == "clone") {
+        if (argc < 4) {
+            std::cerr << "Usage: " << argv[0] << " clone <repo_url> <output_path>" << std::endl;
+            return EXIT_FAILURE;
+        }
+        try {
+            std::string repo_url = argv[2];
+            std::string output_path = argv[3];
+            clone_repository(repo_url, output_path);
+            std::cout << "Clone completed successfully.\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Clone error: " << e.what() << "\n";
+            return EXIT_FAILURE;
+        }
+    }
     else {
         std::cerr << "Unknown command " << command << '\n';
         return EXIT_FAILURE;
