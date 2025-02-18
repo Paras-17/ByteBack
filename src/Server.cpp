@@ -143,7 +143,9 @@ std::string write_tree(const fs::path &dir) {
     }
     
     // Build the full tree object: header "tree <payload_size>\0" followed by payload.
-    std::string header = "tree " + std::to_string(payload.size()) + "\0";
+    std::string header = "tree " + std::to_string(payload.size());
+    header.push_back('\0');
+
     std::string tree_object = header + payload;
     
     // Write the tree object and return its SHA.
