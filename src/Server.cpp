@@ -9,6 +9,8 @@
 #include <zlib.h>
 #include <openssl/sha.h>
 #include <cstring>
+#include <optional>
+// #include <fmt/format.h>
 namespace fs = std::filesystem;
 
 // ----------------------------------------------------------------
@@ -233,6 +235,75 @@ std::string write_tree(const std::string dir_path) {
     outfile.close();
     return tree_sha;
 }
+// Compute the SHA1 hash of the given data and return it as a 40-character hex string.
+std::string compute_sha1_as_hex(const std::string &data) {
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(reinterpret_cast<const unsigned char*>(data.data()), data.size(), hash);
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+        oss << std::setw(2) << static_cast<int>(hash[i]);
+    }
+    return oss.str();
+}
+
+// Compress the given string using zlib and return the compressed data as a std::string.
+std::string compress_data(const std::string &data) {
+    uLongf compressedSize = compressBound(data.size());
+    std::vector<char> buffer(compressedSize);
+    int ret = compress(reinterpret_cast<Bytef*>(buffer.data()), &compressedSize,
+                       reinterpret_cast<const Bytef*>(data.data()), data.size());
+    if (ret != Z_OK) {
+        throw std::runtime_error("Compression failed with error code: " + std::to_string(ret));
+    }
+    return std::string(buffer.data(), compressedSize);
+}
+
+void commit_tree(const std::string &tree_sha,
+    const std::optional<std::string> &parent_commit_sha,
+    const std::string &message) {
+// Build the commit body using std::ostringstream.
+std::ostringstream body;
+body << "tree " << tree_sha << "\n";
+if (parent_commit_sha.has_value() && !parent_commit_sha->empty()) {
+body << "parent " << *parent_commit_sha << "\n";
+}
+body << "author Nikola <nikolavla@gmail.com> 708104450+0000\n";
+body << "committer Nikola <nikolavla@gmail.com> 708104450+0000\n";
+body << "\n" << message << "\n";
+std::string body_str = body.str();
+
+// Build the header: "commit <body_length>\0"
+std::ostringstream header;
+header << "commit " << body_str.size();
+header.put('\0');  // Append the null byte explicitly.
+std::string commit_contents = header.str() + body_str;
+
+// Compute the commit SHA using our helper.
+std::string commit_hash = compute_sha1_as_hex(commit_contents);
+
+// Compress the commit object using our compress_data() helper.
+std::string compressed_data = compress_data(commit_contents);
+
+// Build the output path using std::ostringstream.
+std::ostringstream dir_oss;
+dir_oss << ".git/objects/" << commit_hash.substr(0, 2);
+std::string directory = dir_oss.str();
+std::filesystem::create_directories(directory);
+
+std::ostringstream filepath;
+filepath << directory << "/" << commit_hash.substr(2);
+std::ofstream output(filepath.str(), std::ios::binary);
+if (!output.is_open()) {
+std::cerr << "Failed to write commit object file: " << filepath.str() << "\n";
+exit(EXIT_FAILURE);
+}
+output.write(compressed_data.data(), compressed_data.size());
+output.close();
+
+// Print the commit SHA to stdout.
+std::cout << commit_hash << std::endl;
+}
 
 // ----------------------------------------------------------------
 // Main
@@ -439,7 +510,12 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
         std::cout << tree_hash << "\n";
-    }
+    }else if (command == "commit-tree") {
+        std::string tree_sha(argv[2]);
+        std::string parent_commit_sha(argv[4]);
+        std::string message(argv[6]);
+        commit_tree(tree_sha, parent_commit_sha, message);
+      }
     else {
         std::cerr << "Unknown command " << command << '\n';
         return EXIT_FAILURE;
