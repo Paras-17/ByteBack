@@ -28,7 +28,7 @@ const size_t SHA_CHUNK_SIZE = 8192;
 struct TreeEntry {
     std::string mode; // "100644" for file, "40000" for directory
     std::string name;
-    std::string sha;  // 40-character hex SHA
+    std::string sha;  // 40-char hex SHA
 };
 
 struct FileSystemEntry {
@@ -50,7 +50,6 @@ struct CommitInfo {
     std::string message;
 };
 
-// Mapping for packfile object types (for clone functionality)
 const std::map<int, std::string> PACK_OBJECT_TYPES = {
     {1, "commit"},
     {2, "tree"},
@@ -64,7 +63,7 @@ const std::map<int, std::string> PACK_OBJECT_TYPES = {
 // Utility Functions
 // ----------------------------------------------------------------
 
-// Convert a 40-character hex string into its raw 20-byte binary representation.
+// Convert a 40-character hex string into its raw 20-byte binary form.
 std::string hex_to_raw(const std::string &hex) {
     std::string raw;
     raw.resize(20);
@@ -77,7 +76,7 @@ std::string hex_to_raw(const std::string &hex) {
     return raw;
 }
 
-// Compute the SHA-1 hash for a string and return a 40-character hex string.
+// Compute SHA1 hash for data and return a 40-character hex string.
 std::string compute_sha1_as_hex(const std::string &data) {
     unsigned char hash[SHA_DIGEST_LENGTH];
     SHA1(reinterpret_cast<const unsigned char*>(data.data()), data.size(), hash);
@@ -89,7 +88,7 @@ std::string compute_sha1_as_hex(const std::string &data) {
     return oss.str();
 }
 
-// Compress data using zlib and return the compressed string.
+// Compress data using zlib.
 std::string compress_data(const std::string &data) {
     uLongf compressedSize = compressBound(data.size());
     std::vector<char> buffer(compressedSize);
@@ -101,17 +100,14 @@ std::string compress_data(const std::string &data) {
     return std::string(buffer.data(), compressedSize);
 }
 
-// Write an object (blob, tree, commit, etc.) to the .git/objects directory.
-// object_data should be the uncompressed data (including header).
-// Returns the 40-character hash (hex).
+// Write an object to .git/objects.
+// object_data must be the uncompressed data (including header).
 std::string write_object(const std::string &object_data) {
     std::string hashString = compute_sha1_as_hex(object_data);
     std::string compressed = compress_data(object_data);
-
     std::string dir = ".git/objects/" + hashString.substr(0, 2);
     fs::create_directories(dir);
     std::string object_path = dir + "/" + hashString.substr(2);
-
     if (!fs::exists(object_path)) {
         std::ofstream out(object_path, std::ios::binary);
         if (!out.is_open()) {
@@ -122,7 +118,7 @@ std::string write_object(const std::string &object_data) {
     return hashString;
 }
 
-// Read an object from .git/objects by its hash and return the content (after the header).
+// Read an object (after decompression) and return its content (after header).
 std::string read_object(const std::string &hash, const std::string &git_base = ".") {
     std::string path = git_base + "/.git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
     if (!fs::exists(path)) {
@@ -134,7 +130,6 @@ std::string read_object(const std::string &hash, const std::string &git_base = "
     std::ostringstream oss;
     oss << file.rdbuf();
     std::string compressed_data = oss.str();
-    // Decompress (a simple version: assume max size multiplier of 4)
     uLongf decompressed_size = compressed_data.size() * 4;
     std::vector<char> buffer(decompressed_size);
     int ret = uncompress(reinterpret_cast<Bytef*>(buffer.data()), &decompressed_size,
@@ -152,19 +147,22 @@ std::string read_object(const std::string &hash, const std::string &git_base = "
     }
     buffer.resize(decompressed_size);
     std::string full_data(buffer.begin(), buffer.end());
-    // The header ends at the first null byte.
     auto pos = full_data.find('\0');
-    if (pos == std::string::npos) {
+    if (pos == std::string::npos)
         throw std::runtime_error("Invalid object format");
-    }
     return full_data.substr(pos + 1);
+}
+
+// Returns the object path for a given hash.
+std::string get_object_path(const std::string &hash, const std::string &output_path = ".") {
+    return output_path + "/.git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
 }
 
 // ----------------------------------------------------------------
 // Blob & Tree Functions
 // ----------------------------------------------------------------
 
-// Create a blob object from a file and return its hash.
+// Create a blob object from a file.
 std::string hash_object(const std::string &file_path) {
     std::ifstream file(file_path, std::ios::binary);
     if (!file.is_open())
@@ -178,7 +176,7 @@ std::string hash_object(const std::string &file_path) {
     return write_object(blob_object);
 }
 
-// Recursively write a tree object from a directory (ignoring .git) and return its hash.
+// Recursively write a tree object from a directory and return its hash.
 std::string write_tree(const std::string &dir_path) {
     fs::path dir(dir_path);
     std::vector<std::pair<std::string, std::string>> entries; // (name, entry_data)
@@ -195,7 +193,7 @@ std::string write_tree(const std::string &dir_path) {
         } else {
             continue;
         }
-        // Convert 40-char SHA to raw binary string.
+        // Convert 40-char SHA to raw binary.
         std::string binary_sha;
         for (size_t i = 0; i < sha1.length(); i += 2) {
             std::string byteStr = sha1.substr(i, 2);
@@ -205,7 +203,6 @@ std::string write_tree(const std::string &dir_path) {
         std::string entry_data = mode + " " + name + '\0' + binary_sha;
         entries.push_back({name, entry_data});
     }
-    // Sort alphabetically by name.
     std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) {
         return a.first < b.first;
     });
@@ -224,7 +221,7 @@ std::string write_tree(const std::string &dir_path) {
 // Commit Functions
 // ----------------------------------------------------------------
 
-// Build commit content from tree hash, list of parent hashes, and message.
+// Build commit content string given a tree hash, parent hashes, and a message.
 std::string get_commit_content(
     const std::string &tree_hash,
     const std::vector<std::string> &parents,
@@ -247,8 +244,7 @@ std::string get_commit_content(
     return header.str() + body;
 }
 
-// Create a commit object from tree hash, an optional parent commit hash, and a message.
-// Writes the commit object and prints its hash.
+// Create a commit object.
 void commit_tree(const std::string &tree_sha,
                  const std::optional<std::string> &parent_commit_sha,
                  const std::string &message) {
@@ -265,13 +261,14 @@ void commit_tree(const std::string &tree_sha,
 // Clone and Packfile Functions (Simplified)
 // ----------------------------------------------------------------
 
-// CURL write callback
+// CURL write callback.
 size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     std::string* response = reinterpret_cast<std::string*>(userdata);
     response->append(ptr, size * nmemb);
     return size * nmemb;
 }
 
+// Initialize CURL.
 CURL* init_curl() {
     CURL* curl = curl_easy_init();
     if (!curl)
@@ -279,7 +276,7 @@ CURL* init_curl() {
     return curl;
 }
 
-// Perform HTTP GET and return response as string.
+// Perform HTTP GET.
 std::string http_get(CURL* curl, const std::string& url) {
     std::string response;
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -295,7 +292,7 @@ std::string http_get(CURL* curl, const std::string& url) {
     return response;
 }
 
-// Construct remote URL for refs.
+// Construct remote refs URL.
 std::string get_refs_url(const std::string& repo_url) {
     std::string url = repo_url;
     if (url.back() == '/')
@@ -303,7 +300,7 @@ std::string get_refs_url(const std::string& repo_url) {
     return url + ".git/info/refs?service=git-upload-pack";
 }
 
-// Construct remote URL for upload-pack.
+// Construct remote upload-pack URL.
 std::string get_upload_pack_url(const std::string& repo_url) {
     std::string url = repo_url;
     if (url.back() == '/')
@@ -313,17 +310,15 @@ std::string get_upload_pack_url(const std::string& repo_url) {
     return url + "/git-upload-pack";
 }
 
-// Parse remote refs response into vector of GitRef.
+// Parse remote refs from response.
 std::vector<GitRef> parse_git_refs(const std::string& response) {
     std::vector<GitRef> refs;
     std::istringstream iss(response);
     std::string line;
-    // Skip protocol header lines.
     std::getline(iss, line);
     std::getline(iss, line);
     while (std::getline(iss, line)) {
-        if (line.size() < 44)
-            continue;
+        if (line.size() < 44) continue;
         std::string hash = line.substr(4, 40);
         size_t ref_pos = line.find(" refs/");
         if (ref_pos != std::string::npos) {
@@ -334,19 +329,19 @@ std::vector<GitRef> parse_git_refs(const std::string& response) {
     return refs;
 }
 
-// Fetch packfile from remote via HTTP POST.
+// Fetch packfile via HTTP POST.
 std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<GitRef>& refs) {
     std::string response;
     std::stringstream req_body;
-    // For simplicity, request the first ref.
     if (!refs.empty()) {
         std::string want_line = "want " + refs[0].hash + "\n";
         std::stringstream length_prefix;
-        length_prefix << std::hex << std::setw(4) << std::setfill('0')
+        length_prefix << std::hex << std::setw(4) << std::setfill('0') 
                       << (want_line.size() + 4);
         req_body << length_prefix.str() << want_line;
     }
-    req_body << "0000";
+    // Append flush and done packets.
+    req_body << "0000" << "0009done\n";
     std::string req_str = req_body.str();
     
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -364,13 +359,24 @@ std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<Git
     return response;
 }
 
-// Simplified stub for processing packfile.
+// Minimal packfile processing: store the packfile without unpacking.
 void process_packfile(const std::string& pack_data, const std::string& output_path) {
-    std::cout << "Received packfile of size " << pack_data.size() << " bytes.\n";
-    // In a full implementation, you would unpack objects here.
+    std::string pack_dir = output_path + "/.git/objects/pack";
+    fs::create_directories(pack_dir);
+    std::string pack_path = pack_dir + "/packfile.pack";
+    std::ofstream out(pack_path, std::ios::binary);
+    if (!out.is_open())
+        throw std::runtime_error("Failed to write packfile");
+    out.write(pack_data.data(), pack_data.size());
+    out.close();
+    std::cout << "Stored packfile at " << pack_path << ". Unpacking not implemented.\n";
 }
 
-// Initialize a Git repository in target_path.
+// ----------------------------------------------------------------
+// Clone Functionality
+// ----------------------------------------------------------------
+
+// Initialize a Git repository in the target path.
 void init_git(const std::string& target_path = ".") {
     fs::create_directories(target_path);
     fs::create_directory(target_path + "/.git");
@@ -386,7 +392,7 @@ void init_git(const std::string& target_path = ".") {
     }
 }
 
-// Clone repository: initialize repo, fetch remote refs and packfile, and process packfile.
+// Clone a repository from repo_url into output_path.
 void clone_repository(const std::string& repo_url, const std::string& output_path) {
     CURL* curl = init_curl();
     if (!curl)
@@ -400,7 +406,9 @@ void clone_repository(const std::string& repo_url, const std::string& output_pat
             throw std::runtime_error("No refs found from remote");
         std::string upload_pack_url = get_upload_pack_url(repo_url);
         std::string pack_response = fetch_pack(curl, upload_pack_url, refs);
+        // For now, we simply store the packfile.
         process_packfile(pack_response, output_path);
+        // Update HEAD (set to refs/heads/main for simplicity).
         std::ofstream headFile(fs::path(output_path) / ".git/HEAD");
         if (headFile.is_open()) {
             headFile << "ref: refs/heads/main\n";
@@ -427,9 +435,6 @@ int handle_init() {
     }
     return EXIT_SUCCESS;
 }
-std::string get_object_path(const std::string& hash, const std::string& output_path = ".") {
-    return output_path + "/.git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
-}
 
 int handle_cat_file(int argc, char* argv[]) {
     if (argc < 4) {
@@ -437,11 +442,6 @@ int handle_cat_file(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     std::string hash = argv[3];
-    std::string object_path = get_object_path(hash);
-    if (!fs::exists(object_path)) {
-        std::cerr << "Object not found: " << hash << "\n";
-        return EXIT_FAILURE;
-    }
     try {
         std::string content = read_object(hash);
         std::cout << content;
@@ -490,7 +490,6 @@ int handle_ls_tree(int argc, char* argv[]) {
     }
     try {
         std::string content = read_object(tree_sha);
-        // Skip header (ends at first null byte)
         size_t pos = content.find('\0');
         if (pos == std::string::npos) {
             std::cerr << "Invalid tree object format: header not found.\n";
@@ -506,7 +505,7 @@ int handle_ls_tree(int argc, char* argv[]) {
             if (null_pos == std::string::npos) break;
             std::string name = content.substr(pos, null_pos - pos);
             std::cout << name << "\n";
-            pos = null_pos + 1 + 20; // skip SHA bytes
+            pos = null_pos + 1 + 20; // Skip SHA bytes.
         }
     } catch (const std::exception &e) {
         std::cerr << e.what() << "\n";
