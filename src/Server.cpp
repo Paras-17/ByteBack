@@ -36,13 +36,13 @@ struct CommitInfo {
 };
 
 
-struct GitObject {
+struct ByteBackObject {
     std::string type;
     std::vector<char> content;
 };
 
 
-struct GitRef {
+struct ByteBackRef {
     std::string name;
     std::string hash;
 };
@@ -67,14 +67,14 @@ const std::map<int, std::string> PACK_OBJECT_TYPES = {
 
 
 
-void check_git_initialised() {
-    if (!fs::exists(".git") || ! fs::exists(".git/objects") || !fs::exists(".git/refs")) {
-        throw std::runtime_error("Git is not initialised!");
+void check_ByteBack_initialised() {
+    if (!fs::exists(".ByteBack") || ! fs::exists(".ByteBack/objects") || !fs::exists(".ByteBack/refs")) {
+        throw std::runtime_error("ByteBack is not initialised!");
     }
 }
 
 std::string get_object_path(const std::string& hash, const std::string& output_path = ".") {
-    return output_path + "/.git/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
+    return output_path + "/.ByteBack/objects/" + hash.substr(0, 2) + "/" + hash.substr(2);
 }
 
 
@@ -168,8 +168,8 @@ std::string compress_zlib(const std::string& input) {
 }
 
 
-std::string get_object(const std::string& hash, const std::string& git_base = ".") {
-    std::string path = get_object_path(hash, git_base);
+std::string get_object(const std::string& hash, const std::string& ByteBack_base = ".") {
+    std::string path = get_object_path(hash, ByteBack_base);
     std::cout << "path: " << path << std::endl;
 
     if (!fs::exists(path)) {
@@ -200,12 +200,12 @@ bool ends_with(const std::string &str, const std::string &suffix) {
 }
 
 std::string get_refs_url(const std::string& repo_url) {
-    std::string git_url = repo_url;
-    if (ends_with(git_url, "/")) {
-        git_url = git_url.substr(0, git_url.length() - 1);
+    std::string ByteBack_url = repo_url;
+    if (ends_with(ByteBack_url, "/")) {
+        ByteBack_url = ByteBack_url.substr(0, ByteBack_url.length() - 1);
     }
-    std::cout << git_url << ".git/info/refs?service=git-upload-pack" << std::endl;
-    return git_url + ".git/info/refs?service=git-upload-pack";
+    std::cout << ByteBack_url << ".ByteBack/info/refs?service=ByteBack-upload-pack" << std::endl;
+    return ByteBack_url + ".ByteBack/info/refs?service=ByteBack-upload-pack";
 }
 
 
@@ -213,8 +213,8 @@ std::string get_refs_url(const std::string& repo_url) {
 std::string get_upload_pack_url(const std::string& repo_url) {
     std::string base_url = repo_url;
     if (base_url.back() == '/') base_url.pop_back();
-    if (base_url.substr(base_url.length() - 4) != ".git") base_url += ".git";
-    return base_url + "/git-upload-pack";
+    if (base_url.substr(base_url.length() - 4) != ".ByteBack") base_url += ".ByteBack";
+    return base_url + "/ByteBack-upload-pack";
 }
 
 
@@ -234,18 +234,18 @@ CURL* init_curl() {
 }
 
 
-void init_git(const std::string& target_path = ".") {
+void init_ByteBack(const std::string& target_path = ".") {
     std::filesystem::create_directories(target_path);
-    std::filesystem::create_directory(target_path + "/.git");
-    std::filesystem::create_directory(target_path + "/.git/objects");
-    std::filesystem::create_directory(target_path + "/.git/refs");
+    std::filesystem::create_directory(target_path + "/.ByteBack");
+    std::filesystem::create_directory(target_path + "/.ByteBack/objects");
+    std::filesystem::create_directory(target_path + "/.ByteBack/refs");
 
-    std::ofstream headFile(target_path + "/.git/HEAD");
+    std::ofstream headFile(target_path + "/.ByteBack/HEAD");
     if (headFile.is_open()) {
         headFile << "ref: refs/heads/main\n";
         headFile.close();
     } else {
-        throw std::runtime_error("Failed to create .git/HEAD file");
+        throw std::runtime_error("Failed to create .ByteBack/HEAD file");
     }
 }
 
@@ -270,7 +270,7 @@ std::string http_get(CURL* curl, const std::string& url) {
 }
 
 
-std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<GitRef>& refs) {
+std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<ByteBackRef>& refs) {
     std::string response;
     std::stringstream request_body;
     
@@ -301,12 +301,12 @@ std::string fetch_pack(CURL* curl, const std::string& url, const std::vector<Git
 }
 
 
-std::vector<GitRef> parse_git_refs(const std::string& response) {
-    std::vector<GitRef> refs;
+std::vector<ByteBackRef> parse_ByteBack_refs(const std::string& response) {
+    std::vector<ByteBackRef> refs;
     std::istringstream stream(response);
     std::string line;
 
-    std::getline(stream, line); // First line with # service=git-upload-pack
+    std::getline(stream, line); // First line with # service=ByteBack-upload-pack
     std::getline(stream, line); // Empty line (0000)
 
     while (std::getline(stream, line)) {
@@ -599,8 +599,8 @@ void process_packfile(const std::string& pack_data, const std::string& output_pa
 }
 
 
-void write_files(const std::string& tree_hash, const std::string& git_path, const std::string& output_path) {
-    auto tree_content = get_object(tree_hash, git_path);
+void write_files(const std::string& tree_hash, const std::string& ByteBack_path, const std::string& output_path) {
+    auto tree_content = get_object(tree_hash, ByteBack_path);
 
     size_t pos = 0;
     while (pos < tree_content.size()) {
@@ -630,9 +630,9 @@ void write_files(const std::string& tree_hash, const std::string& git_path, cons
             if (!std::filesystem::exists(full_path)) {
                 std::filesystem::create_directory(full_path);
             }
-            write_files(hex_hash, git_path, full_path);  // Recursively process subdirectory
+            write_files(hex_hash, ByteBack_path, full_path);  // Recursively process subdirectory
         } else {  // File
-            auto blob_content = get_object(hex_hash, git_path);
+            auto blob_content = get_object(hex_hash, ByteBack_path);
             std::ofstream file(full_path, std::ios::binary);
             file.write(blob_content.data(), blob_content.size());
         }
@@ -745,7 +745,7 @@ std::string write_tree(const std::string& dir_path) {
     for (const auto& entry : fs::directory_iterator(dir_path)) {
         FileSystemEntry fs_entry;
         fs_entry.name = entry.path().filename().string();
-        if (fs_entry.name == ".git") {
+        if (fs_entry.name == ".ByteBack") {
             continue;
         } else if (fs::is_regular_file(entry)) {
             fs_entry.mode = "100644";
@@ -797,9 +797,9 @@ void clone_repository(const std::string& repo_url, const std::string& output_pat
         throw std::runtime_error("Failed to initialize CURL");
     }
     try {
-        init_git(output_path);
+        init_ByteBack(output_path);
         auto refs_resp = http_get(curl, get_refs_url(repo_url));
-        auto refs = parse_git_refs(refs_resp);
+        auto refs = parse_ByteBack_refs(refs_resp);
         auto pack_resp = fetch_pack(curl, get_upload_pack_url(repo_url), refs);
         process_packfile(pack_resp, output_path);
 
@@ -842,8 +842,8 @@ void clone_repository(const std::string& repo_url, const std::string& output_pat
 
 int handle_init() {
     try {
-        init_git();
-        std::cout << "Initialized git directory\n";
+        init_ByteBack();
+        std::cout << "Initialized ByteBack directory\n";
     } catch (const std::filesystem::filesystem_error& e) {
         std::cerr << e.what() << '\n';
         return EXIT_FAILURE;
@@ -857,7 +857,7 @@ int handle_cat_file(int argc, char *argv[]) {
         std::cerr << "Usage: " << argv[0] << " cat-file -p <hash>" << std::endl;
         return EXIT_FAILURE;
     }
-    check_git_initialised();
+    check_ByteBack_initialised();
     std::string hash = argv[3];
     std::string object_path = get_object_path(hash);
     if (!fs::exists(object_path)) {
@@ -888,7 +888,7 @@ int handle_hash_object(int argc, char *argv[]) {
         std::cerr << "Usage: " << argv[0] << " hash-object -w <file>" << std::endl;
         return EXIT_FAILURE;
     }
-    check_git_initialised();
+    check_ByteBack_initialised();
     std::string input_path = argv[3];
     std::string raw_hash = get_sha1(input_path);
     std::string hash = hash_to_hex(raw_hash);
@@ -903,7 +903,7 @@ int handle_ls_tree_object(int argc, char *argv[]) {
         std::cerr << "Usage: " << argv[0] << " ls-tree --name-only <tree_sha>" << std::endl;
         return EXIT_FAILURE;
     }
-    check_git_initialised();
+    check_ByteBack_initialised();
     std::string hash = argv[3];
     std::string object_path = get_object_path(hash);
     if (!fs::exists(object_path)) {
@@ -927,7 +927,7 @@ int handle_write_tree_object(int argc, char *argv[]) {
         std::cerr << "Usage: " << argv[0] << " write-tree" << std::endl;
         return EXIT_FAILURE;
     }
-    check_git_initialised();
+    check_ByteBack_initialised();
     std::string hash = write_tree(".");
     std::cout << hash_to_hex(hash) << std::endl;
     return EXIT_SUCCESS;
@@ -939,7 +939,7 @@ int handle_commit_tree_object(int argc, char *argv[]) {
         std::cerr << "Usage: " << argv[0] << " commit-tree <tree_sha> -p <commit_sha> -m <message>" << std::endl;
         return EXIT_FAILURE;
     }
-    check_git_initialised();
+    check_ByteBack_initialised();
     std::string tree_sha = argv[2];
     std::string commit_sha = argv[4];
     std::string message = argv[6];

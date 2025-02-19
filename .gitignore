@@ -1,5 +1,19 @@
 # Prerequisites
 *.d
+# Ignore Visual Studio Code settings
+.vscode/
+
+# Ignore Codecrafters local configuration (if not needed by others)
+.codecrafters/
+
+# Ignore build output directories (if any exist)
+build/
+out/
+.gitignore
+.gitattributes
+# Ignore temporary files
+*.log
+*.tmp
 
 # Compiled Object files
 *.slo
