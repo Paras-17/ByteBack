@@ -5,7 +5,7 @@
   
 </head>
 <body>
-  <h1>Git Starter C++ Project</h1>
+  <h1>ByteBack C++ Project</h1>
   
   <div class="section">
     <h2>Overview</h2>
@@ -17,7 +17,7 @@
     </p>
     <ul>
       <li><strong>Blob Creation:</strong> Reads file content, constructs a blob with header ("blob &lt;size&gt;\0") and stores it in the Git object store.</li>
-      <li><strong>Tree Creation:</strong> Recursively scans directories (ignoring the .git folder) and creates tree objects. Each tree entry is stored as "<code>&lt;mode&gt; &lt;name&gt;\0</code>" followed by a 20-byte raw SHA-1 hash.</li>
+      <li><strong>Tree Creation:</strong> Recursively scans directories (ignoring the .ByteBack folder) and creates tree objects. Each tree entry is stored as "<code>&lt;mode&gt; &lt;name&gt;\0</code>" followed by a 20-byte raw SHA-1 hash.</li>
       <li><strong>Commit Creation:</strong> Builds commit objects containing the tree hash, parent commit (if any), author/committer information, and commit message. The commit object is stored with a header ("commit &lt;body_size&gt;\0").</li>
       <li><strong>Clone Functionality:</strong> Initializes a local repository, fetches remote references and a packfile via HTTP, and stores the packfile (packfile unpacking is not implemented in this version).</li>
     </ul>
